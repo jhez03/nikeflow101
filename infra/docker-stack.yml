@@ -40,15 +40,8 @@ services:
       - caddy_data:/data # Let's Encrypt certificates — must survive redeploys
       - caddy_config:/config # Caddy internal config state
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager # TLS cert volume is node-local; pin to manager
       update_config:
-        order: stop-first # ports 80/443 cannot be double-bound in host mode
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
+        order: start-first
 
   # ── php: Laravel application (PHP-FPM) ──────────────────────────────────────
   php:
@@ -78,21 +71,8 @@ services:
       FILESYSTEM_DISK: local
       TRUSTED_PROXIES: "*"
     deploy:
-      replicas: 2
       update_config:
-        parallelism: 1
-        order: start-first # new replica starts and passes healthcheck before old one stops
-        delay: 10s
-        monitor: 30s
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-        failure_action: continue
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        order: start-first
     healthcheck:
       test: ["CMD", "php-fpm", "-t"]
       interval: 15s
