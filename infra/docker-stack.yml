@@ -19,8 +19,6 @@
 # External volume must also be pre-created:
 #   docker --context vps volume create nikeflow_db_data
 
-version: "3.9"
-
 services:
   # ── Caddy: TLS termination + static assets + FastCGI proxy ─────────────────
   # Replaces the old caddy+nginx pair. One container does everything.
@@ -57,9 +55,14 @@ services:
     image: ${PHP_IMAGE}
     networks:
       - backend
+    secrets:
+      - app_key
+      - db_password
+      - db_username
     environment:
       APP_ENV: staging
       APP_DEBUG: "false"
+      APP_KEY_FILE: /run/secrets/app_key
       APP_URL: https://staging.thelaravelers.com
       LOG_CHANNEL: stderr
       LOG_LEVEL: warning
@@ -67,18 +70,13 @@ services:
       DB_HOST: db
       DB_PORT: "3306"
       DB_DATABASE: laravel
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      SESSION_DRIVER: redis
-      QUEUE_CONNECTION: redis
-      CACHE_STORE: redis
+      DB_PASSWORD_FILE: /run/secrets/db_passowrd
+      DB_USERNAME_FILE: /run/secrets/db_username
+      SESSION_DRIVER: database
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
       FILESYSTEM_DISK: local
       TRUSTED_PROXIES: "*"
-    secrets:
-      - app_key
-      - db_password
-      - db_username
-      - redis_password
     deploy:
       replicas: 2
       update_config:
@@ -102,108 +100,6 @@ services:
       retries: 5
       start_period: 60s # time for entrypoint migrate + cache warm-up
 
-  # ── worker: Laravel queue worker ────────────────────────────────────────────
-  worker:
-    image: ${PHP_IMAGE}
-    command:
-      [
-        "php",
-        "/var/www/artisan",
-        "queue:work",
-        "--sleep=3",
-        "--tries=3",
-        "--timeout=60",
-      ]
-    networks:
-      - backend
-    environment:
-      APP_ENV: staging
-      APP_DEBUG: "false"
-      DB_CONNECTION: mysql
-      DB_HOST: db
-      DB_PORT: "3306"
-      DB_DATABASE: laravel
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      QUEUE_CONNECTION: redis
-      CACHE_STORE: redis
-      LOG_CHANNEL: stderr
-    secrets:
-      - app_key
-      - db_password
-      - db_username
-      - redis_password
-    deploy:
-      replicas: 1
-      update_config:
-        order: stop-first # drain in-flight jobs before stopping
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
-
-  # ── scheduler: Laravel task scheduler ───────────────────────────────────────
-  scheduler:
-    image: ${PHP_IMAGE}
-    command: ["php", "/var/www/artisan", "schedule:work"]
-    networks:
-      - backend
-    environment:
-      APP_ENV: staging
-      APP_DEBUG: "false"
-      DB_CONNECTION: mysql
-      DB_HOST: db
-      DB_PORT: "3306"
-      DB_DATABASE: laravel
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      QUEUE_CONNECTION: redis
-      CACHE_STORE: redis
-      LOG_CHANNEL: stderr
-    secrets:
-      - app_key
-      - db_password
-      - db_username
-      - redis_password
-    deploy:
-      replicas: 1
-      update_config:
-        order: stop-first
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
-
-  # ── redis: Session store, cache, and queue broker ───────────────────────────
-  redis:
-    image: redis:7-alpine
-    command: >
-      sh -c "redis-server
-        --requirepass $$(cat /run/secrets/redis_password)
-        --maxmemory 128mb
-        --maxmemory-policy allkeys-lru
-        --appendonly no"
-    networks:
-      - backend
-    secrets:
-      - redis_password
-    volumes:
-      - redis_data:/data
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-      update_config:
-        order: stop-first
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
   # ── db: MySQL database ───────────────────────────────────────────────────────
   db:
     image: mysql:8.0
@@ -221,16 +117,6 @@ services:
       - mysql_root_password
     volumes:
       - db_data:/var/lib/mysql
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager # ensures db always runs on the node owning db_data volume
-      update_config:
-        order: stop-first
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -254,14 +140,11 @@ secrets:
     external: true
   mysql_root_password:
     external: true
-  redis_password:
-    external: true
 
 volumes:
   db_data:
     external:
       true # pre-created: `docker volume create nikeflow_db_data`
       # external: true prevents `stack rm` from deleting production data
-  redis_data: # ephemeral OK for sessions/cache; survives container restarts
   caddy_data: # Let's Encrypt certificates
   caddy_config: # Caddy internal config state

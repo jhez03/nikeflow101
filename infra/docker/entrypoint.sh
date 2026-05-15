@@ -5,24 +5,6 @@ set -e
 
 echo "Starting Laravel container..."
 
-# --- Docker Secrets loader ---
-# Docker Swarm mounts secrets as files at /run/secrets/<secret_name>.
-# Falls back silently to the existing env var value when no secret file exists
-# (e.g., local development with plain env vars).
-load_secret() {
-    local var_name="$1"
-    local secret_name="$2"
-    local secret_file="/run/secrets/${secret_name}"
-    if [ -f "$secret_file" ]; then
-        export "${var_name}=$(tr -d '\n' <"$secret_file")"
-    fi
-}
-
-load_secret APP_KEY app_key
-load_secret DB_PASSWORD db_password
-load_secret DB_USERNAME db_username
-load_secret REDIS_PASSWORD redis_password
-
 if [ "$DB_CONNECTION" = "mysql" ]; then
     echo "Waiting for MySQL at $DB_HOST..."
     DB_WAIT_ATTEMPTS=0
