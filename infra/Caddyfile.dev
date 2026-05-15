@@ -20,6 +20,9 @@
         file_server
     }
 
-    @hidden path_regexp hidden ^/\.(?!well-known)
+    @hidden {
+        path /.*
+        not path /.well-known*
+    }
     respond @hidden 403
 }

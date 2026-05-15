@@ -32,8 +32,11 @@ staging.thelaravelers.com {
         file_server
     }
 
-    # Block hidden files (e.g. .env, .git) except ACME well-known
-    @hidden path_regexp hidden ^/\.(?!well-known)
+    # Block dot-files (e.g. .env, .git) except ACME well-known challenge path
+    @hidden {
+        path /.*
+        not path /.well-known*
+    }
     respond @hidden 403
 }
 
@@ -57,7 +60,10 @@ staging.thelaravelers.com {
 #         file_server
 #     }
 #
-#     @hidden path_regexp hidden ^/\.(?!well-known)
+#     @hidden {
+#         path /.*
+#         not path /.well-known*
+#     }
 #     respond @hidden 403
 # }
 #
