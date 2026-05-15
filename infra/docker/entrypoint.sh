@@ -23,11 +23,6 @@ load_secret DB_PASSWORD db_password
 load_secret DB_USERNAME db_username
 load_secret REDIS_PASSWORD redis_password
 
-# --- Wait for MySQL (only when DB_CONNECTION=mysql) ---
-# Tests use SQLite :memory: and DB_CONNECTION=sqlite — this block is skipped in CI.
-# In staging, DB_HOST, DB_DATABASE, DB_USERNAME, DB_PASSWORD are all Docker env vars.
-# We use PHP's PDO to probe the connection instead of mysqladmin,
-# which avoids installing the mysql-client package in the Alpine image.
 if [ "$DB_CONNECTION" = "mysql" ]; then
     echo "Waiting for MySQL at $DB_HOST..."
     DB_WAIT_ATTEMPTS=0
