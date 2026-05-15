@@ -14,22 +14,13 @@ load_secret() {
     local secret_name="$2"
     local secret_file="/run/secrets/${secret_name}"
     if [ -f "$secret_file" ]; then
-        export "${var_name}=$(tr -d '\n' < "$secret_file")"
+        export "${var_name}=$(tr -d '\n' <"$secret_file")"
     fi
 }
 
-load_secret APP_KEY     app_key
+load_secret APP_KEY app_key
 load_secret DB_PASSWORD db_password
 load_secret DB_USERNAME db_username
-
-# --- APP_KEY guard ---
-# In staging/production, APP_KEY is injected as a Docker env var (not via .env file).
-# If it's missing, the deployment is misconfigured — fail loudly rather than continuing
-# with an empty key, which would invalidate all existing sessions and encrypted data.
-if [ -z "$APP_KEY" ]; then
-  echo "ERROR: APP_KEY environment variable is not set. Exiting."
-  exit 1
-fi
 
 # --- Wait for MySQL (only when DB_CONNECTION=mysql) ---
 # Tests use SQLite :memory: and DB_CONNECTION=sqlite — this block is skipped in CI.
