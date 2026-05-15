@@ -23,11 +23,6 @@ load_secret DB_PASSWORD db_password
 load_secret DB_USERNAME db_username
 load_secret REDIS_PASSWORD redis_password
 
-# Build the Redis URL from the loaded secret so Laravel's redis config picks it up
-if [ -n "$REDIS_PASSWORD" ]; then
-    export REDIS_URL="redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis}:${REDIS_PORT:-6379}"
-fi
-
 # --- Wait for MySQL (only when DB_CONNECTION=mysql) ---
 # Tests use SQLite :memory: and DB_CONNECTION=sqlite — this block is skipped in CI.
 # In staging, DB_HOST, DB_DATABASE, DB_USERNAME, DB_PASSWORD are all Docker env vars.
