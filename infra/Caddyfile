@@ -5,7 +5,7 @@
 # Ports 80 and 443 must be open on the VPS firewall.
 
 {
-    email admin@example.com
+    email jlibay1053538@gmail.com
 }
 
 staging.thelaravelers.com {
