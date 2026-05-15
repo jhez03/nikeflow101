@@ -32,9 +32,6 @@ COPY . .
 
 COPY --from=composer-builder /app/vendor/tightenco ./vendor/tightenco
 
-ARG ACTIVE_THEME=default
-ENV ACTIVE_THEME=${ACTIVE_THEME}
-
 RUN NODE_ENV=production npm run build
 
 # ============================================================
@@ -65,8 +62,10 @@ RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
 WORKDIR /var/www
 
 COPY --from=composer-builder /app/vendor ./vendor
+COPY --from=node-builder /app/public/build ./public/build
 
 COPY . .
+
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 RUN composer dump-autoload --optimize --no-dev \
