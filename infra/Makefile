@@ -27,7 +27,7 @@ install-breeze:
 	# $(COMPOSE_BASE) exec php php artisan key:generate
 	$(COMPOSE_BASE) exec php composer require laravel/breeze --dev
 	$(COMPOSE_BASE) exec php php artisan breeze:install
-	$(COMPOSE_DEV) up -d node nginx
+	$(COMPOSE_DEV) up -d node caddy
 	@echo "✅ Done. Visit http://localhost"
 
 #laravel php artisan commands
@@ -40,15 +40,15 @@ artisan-%:
 #   2. Init Swarm on VPS:      docker --context vps swarm init
 #   3. Create external volume: docker --context vps volume create nikeflow_db_data
 #   4. Create secrets:         make stack-secrets-init
-# Then deploy: make stack-deploy PHP_IMAGE=ghcr.io/.../php:sha-xxx NGINX_IMAGE=ghcr.io/.../nginx:sha-xxx
+# Then deploy: make stack-deploy PHP_IMAGE=ghcr.io/.../php:sha-xxx CADDY_IMAGE=ghcr.io/.../caddy:sha-xxx
 
 STACK_NAME = nikeflow
 STACK_FILE = infra/docker-stack.yml
 DOCKER_CTX = docker --context vps
 
-stack-deploy: ## Deploy or update the stack (PHP_IMAGE and NGINX_IMAGE must be set)
+stack-deploy: ## Deploy or update the stack (PHP_IMAGE and CADDY_IMAGE must be set)
 	@test -n "$(PHP_IMAGE)"   || (echo "ERROR: PHP_IMAGE is not set"   && exit 1)
-	@test -n "$(NGINX_IMAGE)" || (echo "ERROR: NGINX_IMAGE is not set" && exit 1)
+	@test -n "$(CADDY_IMAGE)" || (echo "ERROR: CADDY_IMAGE is not set" && exit 1)
 	$(DOCKER_CTX) stack deploy \
 		--compose-file $(STACK_FILE) \
 		--with-registry-auth \
@@ -81,6 +81,7 @@ stack-secrets-init: ## Interactively create all required Swarm secrets on the re
 	@printf "db_password value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create db_password -
 	@printf "db_username value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create db_username -
 	@printf "mysql_root_password value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create mysql_root_password -
+	@printf "redis_password value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create redis_password -
 	@echo "All secrets created. Verify with: make stack-secrets-list"
 
 stack-secrets-list: ## List secret names on the remote Swarm (values are never shown)

@@ -57,6 +57,11 @@ RUN apk add --no-cache \
         intl \
     && docker-php-ext-enable opcache
 
+RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
+
 WORKDIR /var/www
 
 COPY --from=composer-builder /app/vendor ./vendor
@@ -94,15 +99,15 @@ COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 USER www
 
 # ============================================================
-# Stage 5: nginx-stage — static asset server for Swarm deployment
-# In Swarm, assets cannot be extracted via `docker create`+`docker cp`.
-# This image ships public/build and nginx config so it deploys as a
-# standalone Swarm service alongside the PHP image.
+# Stage 5: caddy-stage — Caddy serving static assets + FastCGI proxy.
+# In Swarm, assets cannot be shared via volumes across nodes.
+# This image bakes in public/build so Caddy can serve them directly,
+# replacing the old nginx-stage image. Caddy handles TLS, static files,
+# and FastCGI proxying to php:9000 in a single container.
 # ============================================================
-FROM nginx:1.27-alpine AS nginx-stage
+FROM caddy:2-alpine AS caddy-stage
 
-COPY --from=node-builder /app/public/build /var/www/public/build
-COPY --from=composer-builder /app/public /var/www/public
-COPY infra/docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY --from=node-builder /app/public /var/www/public
+COPY infra/Caddyfile /etc/caddy/Caddyfile
 
-EXPOSE 80
+EXPOSE 80 443

@@ -17,7 +17,7 @@ on:
 env:
   REGISTRY: ghcr.io
   PHP_IMAGE_NAME: ghcr.io/${{ github.repository }}/php
-  NGINX_IMAGE_NAME: ghcr.io/${{ github.repository }}/nginx
+  CADDY_IMAGE_NAME: ghcr.io/${{ github.repository }}/caddy
 
 # Queues a second deploy rather than cancelling the in-progress one.
 # A deploy killed mid-rollout leaves the stack in an indeterminate state.
@@ -69,12 +69,12 @@ jobs:
             type=ref,event=branch
             type=raw,value=staging
 
-      # ── Step 4b: Generate tags for nginx image ──────────────────────────
-      - name: Extract nginx image metadata
-        id: nginx-meta
+      # ── Step 4b: Generate tags for Caddy image ──────────────────────────
+      - name: Extract Caddy image metadata
+        id: caddy-meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.NGINX_IMAGE_NAME }}
+          images: ${{ env.CADDY_IMAGE_NAME }}
           tags: |
             type=sha,prefix=sha-,format=short
             type=ref,event=branch
@@ -95,21 +95,21 @@ jobs:
           cache-from: type=registry,ref=${{ env.PHP_IMAGE_NAME }}:staging
           cache-to: type=inline
 
-      # ── Step 5b: Build and push nginx image ────────────────────────────
+      # ── Step 5b: Build and push Caddy image ────────────────────────────
       # BuildKit reuses cached layers from step 5a (shared composer-builder
       # and node-builder stages), so this second build is typically very fast.
-      - name: Build and push nginx image
+      - name: Build and push Caddy image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: infra/Dockerfile
-          target: nginx-stage
+          target: caddy-stage
           push: true
-          tags: ${{ steps.nginx-meta.outputs.tags }}
-          labels: ${{ steps.nginx-meta.outputs.labels }}
+          tags: ${{ steps.caddy-meta.outputs.tags }}
+          labels: ${{ steps.caddy-meta.outputs.labels }}
           build-args: |
             ACTIVE_THEME=default
-          cache-from: type=registry,ref=${{ env.NGINX_IMAGE_NAME }}:staging
+          cache-from: type=registry,ref=${{ env.CADDY_IMAGE_NAME }}:staging
           cache-to: type=inline
 
       # ── Step 6: Extract immutable SHA tags for deploy ──────────────────
@@ -117,9 +117,9 @@ jobs:
         id: image-tags
         run: |
           PHP_SHA=$(echo "${{ steps.php-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
-          NGINX_SHA=$(echo "${{ steps.nginx-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
+          CADDY_SHA=$(echo "${{ steps.caddy-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
           echo "php_tag=$PHP_SHA" >> $GITHUB_OUTPUT
-          echo "nginx_tag=$NGINX_SHA" >> $GITHUB_OUTPUT
+          echo "caddy_tag=$CADDY_SHA" >> $GITHUB_OUTPUT
 
       # ── Step 7: Configure SSH for Docker context ───────────────────────
       # Docker context uses SSH under the hood. We add the key to ssh-agent
@@ -145,14 +145,14 @@ jobs:
             --docker "host=ssh://deploy@${{ secrets.VPS_HOST }}"
 
       # ── Step 9: Deploy stack ────────────────────────────────────────────
-      # PHP_IMAGE and NGINX_IMAGE are read from the shell env by `docker stack deploy`
+      # PHP_IMAGE and CADDY_IMAGE are read from the shell env by `docker stack deploy`
       # for variable substitution in docker-stack.yml.
       # --with-registry-auth: passes GHCR credentials to Swarm nodes for image pulls.
       # --prune: removes services no longer present in the stack file.
       - name: Deploy stack to Swarm
         env:
           PHP_IMAGE: ${{ steps.image-tags.outputs.php_tag }}
-          NGINX_IMAGE: ${{ steps.image-tags.outputs.nginx_tag }}
+          CADDY_IMAGE: ${{ steps.image-tags.outputs.caddy_tag }}
         run: |
           docker --context vps stack deploy \
             --compose-file infra/docker-stack.yml \

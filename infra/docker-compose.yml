@@ -11,16 +11,28 @@ services:
         depends_on:
             db:
                 condition: service_healthy
+            redis:
+                condition: service_healthy
 
-    nginx:
-        image: nginx:1.27-alpine
+    caddy:
+        image: caddy:2-alpine
         ports:
             - "80:80"
         volumes:
             - ../:/var/www
-            - ./docker/nginx:/etc/nginx/conf.d:ro
+            - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
         depends_on:
             - php
+
+    redis:
+        image: redis:7-alpine
+        ports:
+            - "6379:6379"
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 10s
+            timeout: 3s
+            retries: 5
 
     db:
         image: mysql:8.0

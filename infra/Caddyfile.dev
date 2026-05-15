@@ -1,0 +1,25 @@
+# Caddy config for local development.
+# No TLS — plain HTTP on :80. Assets served from bind-mounted public/.
+
+{
+    auto_https off
+    admin off
+}
+
+:80 {
+    root * /var/www/public
+
+    @assets path /build/*
+    handle @assets {
+        file_server
+        header Cache-Control "public, max-age=31536000, immutable"
+    }
+
+    handle {
+        php_fastcgi php:9000
+        file_server
+    }
+
+    @hidden path_regexp hidden ^/\.(?!well-known)
+    respond @hidden 403
+}
