@@ -1,47 +1,84 @@
 #!/bin/sh
+set -e
+# set -e: exit on first error. Prevents silent failures where the container
+# appears to start but is actually in a broken state.
 
-echo "🚀 Starting Laravel container..."
+echo "Starting Laravel container..."
 
-# Copy .env if not exists
-# if [ ! -f .env ]; then
-#   echo "📄 Creating .env file..."
-#   cp .env.example .env
-# fi
-
-# Generate app key if not set
-if ! grep -q "APP_KEY=base64" .env; then
-  echo "🔑 Generating app key..."
-  php artisan key:generate
-fi
-
-if [ ! -d "vendor" ]; then
-  echo "Installing Composer dependencies..."
-  composer install
-fi
-
-# Wait for MySQL
-echo "⏳ Waiting for database..."
-until php -r "
-try {
-    new PDO('mysql:host=' . getenv('DB_HOST') . ';dbname=' . getenv('DB_DATABASE'), getenv('DB_USERNAME'), getenv('DB_PASSWORD'));
-    echo 'DB connected';
-} catch (Exception \$e) {
-    echo 'DB error: ' . \$e->getMessage() . \"\n\";
-    exit(1);
+# --- Docker Secrets loader ---
+# Docker Swarm mounts secrets as files at /run/secrets/<secret_name>.
+# Falls back silently to the existing env var value when no secret file exists
+# (e.g., local development with plain env vars).
+load_secret() {
+    local var_name="$1"
+    local secret_name="$2"
+    local secret_file="/run/secrets/${secret_name}"
+    if [ -f "$secret_file" ]; then
+        export "${var_name}=$(tr -d '\n' < "$secret_file")"
+    fi
 }
-"; do
-  sleep 2
-done
 
-echo "✅ Database ready"
+load_secret APP_KEY     app_key
+load_secret DB_PASSWORD db_password
+load_secret DB_USERNAME db_username
 
-# Run migrations
+# --- APP_KEY guard ---
+# In staging/production, APP_KEY is injected as a Docker env var (not via .env file).
+# If it's missing, the deployment is misconfigured — fail loudly rather than continuing
+# with an empty key, which would invalidate all existing sessions and encrypted data.
+if [ -z "$APP_KEY" ]; then
+  echo "ERROR: APP_KEY environment variable is not set. Exiting."
+  exit 1
+fi
+
+# --- Wait for MySQL (only when DB_CONNECTION=mysql) ---
+# Tests use SQLite :memory: and DB_CONNECTION=sqlite — this block is skipped in CI.
+# In staging, DB_HOST, DB_DATABASE, DB_USERNAME, DB_PASSWORD are all Docker env vars.
+# We use PHP's PDO to probe the connection instead of mysqladmin,
+# which avoids installing the mysql-client package in the Alpine image.
+if [ "$DB_CONNECTION" = "mysql" ]; then
+    echo "Waiting for MySQL at $DB_HOST..."
+    DB_WAIT_ATTEMPTS=0
+    DB_WAIT_MAX=30
+    until php -r "
+    try {
+      \$dsn = 'mysql:host=' . getenv('DB_HOST') . ';dbname=' . getenv('DB_DATABASE');
+      new PDO(\$dsn, getenv('DB_USERNAME'), getenv('DB_PASSWORD'));
+      exit(0);
+    } catch (Exception \$e) {
+      exit(1);
+    }
+  " 2>/dev/null; do
+        DB_WAIT_ATTEMPTS=$((DB_WAIT_ATTEMPTS + 1))
+        if [ "$DB_WAIT_ATTEMPTS" -ge "$DB_WAIT_MAX" ]; then
+            echo "ERROR: MySQL at $DB_HOST did not become ready after ${DB_WAIT_MAX} attempts. Exiting."
+            exit 1
+        fi
+        echo "  DB not ready, retrying in 2s... ($DB_WAIT_ATTEMPTS/$DB_WAIT_MAX)"
+        sleep 2
+    done
+    echo "Database is ready."
+fi
+
+# --- Run migrations ---
+# --force bypasses the interactive confirmation artisan shows in non-local APP_ENV.
+# This is safe here because we deploy to a controlled staging environment.
+# For blue/green production deploys, run migrate as a pre-deploy job instead.
 php artisan migrate --force
 
-# Optional: seed
-# php artisan db:seed --force
+# --- Laravel optimizations ---
+# These pre-compile config, routes, and views into PHP opcache-friendly files.
+# They MUST run at container start (not at image build time) because they read
+# env vars like APP_KEY, DB_HOST, STRIPE_SECRET_KEY — which only exist at runtime.
+# First startup is ~3s slower; every subsequent request is faster.
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
 
-echo "🔥 Laravel is ready!"
+echo "Laravel is ready. Starting PHP-FPM..."
 
-# Start php-fpm
-exec php-fpm
+# exec "$@" replaces this shell process with the CMD (default: php-fpm, set in Dockerfile).
+# Using "$@" instead of hardcoding `php-fpm` allows worker/scheduler containers to override
+# the command (e.g., `php artisan queue:work`) while still running through this entrypoint
+# for secret loading, DB wait, and migrations.
+exec "$@"

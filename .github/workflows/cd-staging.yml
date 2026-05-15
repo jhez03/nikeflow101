@@ -1,0 +1,191 @@
+name: CD — Staging
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches:
+      - develop
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to build and deploy (default: develop)"
+        required: false
+        default: "develop"
+
+env:
+  REGISTRY: ghcr.io
+  PHP_IMAGE_NAME: ghcr.io/${{ github.repository }}/php
+  NGINX_IMAGE_NAME: ghcr.io/${{ github.repository }}/nginx
+
+# Queues a second deploy rather than cancelling the in-progress one.
+# A deploy killed mid-rollout leaves the stack in an indeterminate state.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, Push & Deploy to Staging
+    runs-on: ubuntu-24.04
+    environment:
+      name: staging
+
+    # Allow manual triggers unconditionally; for automated triggers only proceed when CI passed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # ── Step 1: Checkout the exact commit CI tested ────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.workflow_run.head_sha }}
+
+      # ── Step 2: Enable Docker BuildKit ─────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Step 3: Authenticate to GHCR ───────────────────────────────────
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Step 4a: Generate tags for PHP image ────────────────────────────
+      - name: Extract PHP image metadata
+        id: php-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.PHP_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=raw,value=staging
+
+      # ── Step 4b: Generate tags for nginx image ──────────────────────────
+      - name: Extract nginx image metadata
+        id: nginx-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.NGINX_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=raw,value=staging
+
+      # ── Step 5a: Build and push PHP image ──────────────────────────────
+      - name: Build and push PHP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          target: runtime
+          push: true
+          tags: ${{ steps.php-meta.outputs.tags }}
+          labels: ${{ steps.php-meta.outputs.labels }}
+          build-args: |
+            ACTIVE_THEME=default
+          cache-from: type=registry,ref=${{ env.PHP_IMAGE_NAME }}:staging
+          cache-to: type=inline
+
+      # ── Step 5b: Build and push nginx image ────────────────────────────
+      # BuildKit reuses cached layers from step 5a (shared composer-builder
+      # and node-builder stages), so this second build is typically very fast.
+      - name: Build and push nginx image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          target: nginx-stage
+          push: true
+          tags: ${{ steps.nginx-meta.outputs.tags }}
+          labels: ${{ steps.nginx-meta.outputs.labels }}
+          build-args: |
+            ACTIVE_THEME=default
+          cache-from: type=registry,ref=${{ env.NGINX_IMAGE_NAME }}:staging
+          cache-to: type=inline
+
+      # ── Step 6: Extract immutable SHA tags for deploy ──────────────────
+      - name: Get SHA image tags
+        id: image-tags
+        run: |
+          PHP_SHA=$(echo "${{ steps.php-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
+          NGINX_SHA=$(echo "${{ steps.nginx-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
+          echo "php_tag=$PHP_SHA" >> $GITHUB_OUTPUT
+          echo "nginx_tag=$NGINX_SHA" >> $GITHUB_OUTPUT
+
+      # ── Step 7: Configure SSH for Docker context ───────────────────────
+      # Docker context uses SSH under the hood. We add the key to ssh-agent
+      # and persist the agent socket for subsequent steps via GITHUB_ENV.
+      - name: Configure SSH for Docker context
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_deploy_key
+          chmod 600 ~/.ssh/vps_deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          eval $(ssh-agent -s)
+          ssh-add ~/.ssh/vps_deploy_key
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+
+      # ── Step 8: Create Docker context ──────────────────────────────────
+      # Registers the remote Swarm manager as a named Docker context.
+      # Subsequent `docker --context vps` commands tunnel through SSH —
+      # no SCP, no remote script execution required.
+      - name: Create Docker context
+        run: |
+          docker context create vps \
+            --docker "host=ssh://deploy@${{ secrets.VPS_HOST }}"
+
+      # ── Step 9: Deploy stack ────────────────────────────────────────────
+      # PHP_IMAGE and NGINX_IMAGE are read from the shell env by `docker stack deploy`
+      # for variable substitution in docker-stack.yml.
+      # --with-registry-auth: passes GHCR credentials to Swarm nodes for image pulls.
+      # --prune: removes services no longer present in the stack file.
+      - name: Deploy stack to Swarm
+        env:
+          PHP_IMAGE: ${{ steps.image-tags.outputs.php_tag }}
+          NGINX_IMAGE: ${{ steps.image-tags.outputs.nginx_tag }}
+        run: |
+          docker --context vps stack deploy \
+            --compose-file infra/docker-stack.yml \
+            --with-registry-auth \
+            --prune \
+            nikeflow
+
+      # ── Step 10: Wait for rollout ───────────────────────────────────────
+      # Polls until all php replicas are running (or times out after 200s).
+      # Swarm's start-first update policy means old + new replicas overlap briefly;
+      # we consider the rollout complete once RUNNING == DESIRED.
+      - name: Wait for rollout
+        run: |
+          echo "=== Waiting for nikeflow_php rollout ==="
+          for i in $(seq 1 40); do
+            REPLICAS=$(docker --context vps service ls \
+              --filter name=nikeflow_php \
+              --format "{{.Replicas}}" 2>/dev/null || echo "0/0")
+            RUNNING=$(echo "$REPLICAS" | cut -d'/' -f1)
+            DESIRED=$(echo "$REPLICAS" | cut -d'/' -f2)
+            echo "  Replicas: $REPLICAS ($i/40)"
+            if [ "$RUNNING" = "$DESIRED" ] && [ "$DESIRED" != "0" ]; then
+              echo "Rollout complete after $((i * 5))s."
+              exit 0
+            fi
+            if [ "$i" -eq 40 ]; then
+              echo "ERROR: Rollout did not complete in 200s."
+              docker --context vps service ps nikeflow_php --no-trunc
+              exit 1
+            fi
+            sleep 5
+          done
+
+      # ── Step 11: Prune dangling images ─────────────────────────────────
+      - name: Prune dangling images on VPS
+        run: docker --context vps image prune -f

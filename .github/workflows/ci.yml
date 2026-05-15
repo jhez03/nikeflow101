@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main # production CD uses workflow_run on CI for main
+  pull_request:
+    branches:
+      - develop
+      - main # validates PRs targeting main before merge
+
+# Cancels any in-progress CI run for the same branch/PR when a new push arrives.
+# group uses head_ref (PR source branch) for PRs, ref for direct pushes —
+# ensuring different PRs don't cancel each other's runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Job 1: PHP Linting (Laravel Pint)
+  # ============================================================
+  lint:
+    name: PHP Lint (Pint)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # 8.4 matches the php:8.4-fpm-alpine base image in the Dockerfile.
+          # Linting against the same PHP version the container uses catches syntax errors
+          # that are version-specific (e.g., new 8.4 syntax that 8.3 would reject).
+          php-version: "8.4"
+          extensions: ""
+          # coverage: none skips loading xdebug/pcov — pint doesn't need coverage instrumentation.
+          # This shaves ~5-10s off the job setup time.
+          coverage: none
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          # PHP version is included in the key so a version bump busts the cache.
+          # A vendor/ compiled for PHP 8.3 must not be reused on 8.4 — some extension
+          # stubs and autoloader paths are version-specific and cause silent corruption.
+          key: composer-php8.4-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-php8.4-
+
+      - name: Install Composer dependencies
+        # No --no-dev here: pint lives in require-dev and must be installed.
+        # --no-scripts: prevents artisan commands (package:discover, key:generate) that
+        # require a database or APP_KEY — neither exists in this CI job.
+        # --no-interaction: suppresses prompts that would hang the CI runner.
+        # --prefer-dist: downloads release zips instead of git clones — significantly faster.
+        run: composer install --no-scripts --no-interaction --prefer-dist
+
+      - name: Run Pint
+        # --test: exits non-zero if any file needs reformatting, WITHOUT modifying files.
+        # This enforces code style without auto-committing changes from CI.
+        # Developers must run ./vendor/bin/pint locally and commit the formatted code.
+        run: ./vendor/bin/pint --test
+
+  # ============================================================
+  # Job 2: PHP Tests (PHPUnit)
+  # ============================================================
+  test:
+    name: PHP Tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          # pdo_sqlite: required for SQLite :memory: tests.
+          # phpunit.xml sets DB_CONNECTION=sqlite and DB_DATABASE=:memory: —
+          # no MySQL service container needed in CI at all.
+          # bcmath, mbstring, intl, pcntl, exif: required by Laravel core and the app's
+          # payment/subscription logic (same extensions installed in the Dockerfile).
+          extensions: pdo_sqlite, bcmath, mbstring, intl, pcntl, exif
+          coverage: none
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-php8.4-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-php8.4-
+
+      - name: Install Composer dependencies
+        run: composer install --no-scripts --no-interaction --prefer-dist
+
+      - name: Audit dependencies for known vulnerabilities
+        # composer audit checks all installed packages against the PHP Security Advisories Database.
+        # It's built into Composer 2.4+ — no extra tooling required.
+        # Runs here (before tests) so a CVE blocks the pipeline before any code executes.
+        run: composer audit
+
+      - name: Copy .env
+        # Laravel's bootstrap requires an .env file to exist, even in test mode.
+        # phpunit.xml overrides the critical values (DB_CONNECTION, DB_DATABASE, etc.)
+        # so the actual values in .env.example don't affect test outcomes.
+        run: cp .env.example .env
+
+      - name: Generate application key
+        # Writes APP_KEY=base64:... into .env.
+        # Laravel's Encrypter and session layer require a valid key at boot time.
+        # Without this, bootstrapping throws "No application encryption key has been specified."
+        # MUST run before migrate — artisan commands boot the framework, which needs APP_KEY.
+        run: php artisan key:generate
+
+      - name: Run migrations
+        run: php artisan migrate --force
+
+      - name: Run tests
+        # composer test = php artisan config:clear && php artisan test (see composer.json scripts).
+        # config:clear removes any cached config file from a previous run that might
+        # conflict with phpunit.xml's env overrides (e.g., a cached DB_CONNECTION=mysql
+        # would bypass phpunit.xml's DB_CONNECTION=sqlite setting).
+        run: composer test
+
+  # ============================================================
+  # Job 3: Frontend Asset Build (Vite)
+  # ============================================================
+  build-assets:
+    name: Frontend Build (Vite)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # node: 22 matches node:22-alpine used in Dockerfile Stage 1 and docker-compose.dev.yml.
+          # Keeping the same version across dev, CI, and the Docker build stage ensures
+          # identical Vite output and catches Node version-specific build failures early.
+          node-version: "22"
+          # cache: npm instructs the action to cache the npm global cache (~/.npm) automatically.
+          # On cache hit, npm ci runs in ~10s instead of ~40s.
+          cache: "npm"
+
+      - name: Install npm dependencies
+        # npm ci (clean install): deterministic install from package-lock.json.
+        # Fails if package-lock.json is out of sync with package.json —
+        # catches developer mistakes (e.g., npm install without committing the updated lock file)
+        # before they silently affect the Docker image build.
+        run: npm ci
+
+      - name: Build frontend assets
+        # Validates that all Vue 3 components compile cleanly, all imports resolve
+        # (including the @theme alias → resources/js/themes/default/), and the
+        # vite.config.js multi-theme alias setup is correctly configured.
+        # ACTIVE_THEME=default: vite.config.js reads this via loadEnv(). Since .env
+        # doesn't exist in CI, it falls back to env.ACTIVE_THEME ?? 'default',
+        # but setting it explicitly here makes the intent clear and avoids ambiguity.
+        run: npm run build
+        env:
+          NODE_ENV: production
+          ACTIVE_THEME: default

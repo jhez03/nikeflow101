@@ -1,0 +1,87 @@
+services:
+  php:
+    image: ${PHP_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - /opt/staging/ec_starter_kit/.env
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nginx/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - /opt/staging/ec_starter_kit/infra/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - /opt/staging/ec_starter_kit/public:/var/www/public:ro
+    depends_on:
+      - php
+    networks:
+      - app-network
+
+  worker:
+    image: ${PHP_IMAGE}
+    restart: unless-stopped
+    command:
+      [
+        "php",
+        "/var/www/artisan",
+        "queue:work",
+        "--sleep=3",
+        "--tries=3",
+        "--timeout=60",
+      ]
+    env_file:
+      - /opt/staging/ec_starter_kit/.env
+    depends_on:
+      php:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  scheduler:
+    image: ${PHP_IMAGE}
+    restart: unless-stopped
+    command: ["php", "/var/www/artisan", "schedule:work"]
+    env_file:
+      - /opt/staging/ec_starter_kit/.env
+    depends_on:
+      php:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    env_file:
+      - /opt/staging/ec_starter_kit/.env
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+
+volumes:
+  db_data:
+    external: true
+    name: ec_starter_kit_db_data
+
+networks:
+  app-network:
+    driver: bridge

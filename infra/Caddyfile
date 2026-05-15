@@ -1,0 +1,32 @@
+# Caddy reverse proxy — runs as a service inside the Docker Swarm stack.
+# `nginx` resolves via Swarm overlay network DNS to the nginx service.
+# Caddy terminates TLS (Let's Encrypt) and proxies plain HTTP to nginx.
+#
+# Replace staging.example.com and admin@example.com before deploying.
+# Ports 80 and 443 must be open on the VPS firewall.
+
+{
+    # Used for Let's Encrypt account registration and expiry notices.
+    email admin@example.com
+}
+
+staging.example.com {
+    reverse_proxy nginx:80 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-For {remote_host}
+        header_up Host {host}
+    }
+}
+
+# Uncomment to add production domain to the same stack:
+# example.com {
+#     reverse_proxy nginx:80 {
+#         header_up X-Forwarded-Proto https
+#         header_up X-Forwarded-For {remote_host}
+#         header_up Host {host}
+#     }
+# }
+#
+# www.example.com {
+#     redir https://example.com{uri} permanent
+# }

@@ -1,0 +1,39 @@
+# Rebuilt inside the image — never copied from host
+node_modules/
+vendor/
+
+# Git internals — huge, irrelevant at runtime
+.git/
+.gitignore
+
+# Dev artifacts
+public/hot
+public/storage
+public/build/
+storage/*.key
+storage/pail
+.env
+.env.*
+!.env.example
+
+# IDE / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
+
+# CI/CD and infra orchestration files (not needed inside the PHP container)
+.github/
+infra/docker-compose*.yml
+infra/docker-stack.yml
+infra/Makefile
+
+# Test/dev cache
+.phpunit.cache/
+.phpunit.result.cache
+_ide_helper.php
+
+# Database files
+database/database.sqlite
+
