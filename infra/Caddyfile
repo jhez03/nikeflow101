@@ -8,7 +8,7 @@
     email admin@example.com
 }
 
-staging.example.com {
+staging.thelaravelers.com {
     # Security headers
     header X-Frame-Options "SAMEORIGIN"
     header X-Content-Type-Options "nosniff"
