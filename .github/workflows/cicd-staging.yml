@@ -246,6 +246,9 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/develop')
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Configure SSH for Docker context
         run: |
           mkdir -p ~/.ssh
