@@ -7,7 +7,7 @@
                 <h1
                     class="text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl lg:text-6xl"
                 >
-                    Build beautiful apps, faster
+                    Build beautiful apps
                 </h1>
                 <p class="mx-auto mt-6 max-w-xl text-lg text-gray-600">
                     A modern platform that streamlines your workflow, connects
