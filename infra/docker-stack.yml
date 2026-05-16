@@ -42,7 +42,7 @@ services:
     deploy:
       update_config:
         order: stop-first
-        failure_action: rollback
+        failure_action: pause
         delay: 5s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/health"]
@@ -81,7 +81,7 @@ services:
     deploy:
       update_config:
         order: stop-first
-        failure_action: rollback
+        failure_action: pause
         delay: 5s
     healthcheck:
       test: ["CMD", "php-fpm", "-t"]

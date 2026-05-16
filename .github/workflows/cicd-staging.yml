@@ -214,7 +214,7 @@ jobs:
           labels: ${{ steps.caddy-meta.outputs.labels }}
           build-args: |
             ACTIVE_THEME=default
-          cache-from: type=registry,ref=${{ env.CADDY_IMAGE_NAME }}:staging
+          cache-from: type=registry,ref=${{ env.PHP_IMAGE_NAME }}:staging
           cache-to: type=inline
 
       - name: Get SHA image tags
