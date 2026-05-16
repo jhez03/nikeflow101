@@ -1,0 +1,221 @@
+name: CD — Production
+
+on:
+  release:
+    types: [published]
+
+env:
+  REGISTRY: ghcr.io
+  PHP_IMAGE_NAME: ghcr.io/${{ github.repository }}/php
+  CADDY_IMAGE_NAME: ghcr.io/${{ github.repository }}/caddy
+
+jobs:
+  # ============================================================
+  # Job 1: Build & Push Production Docker Images
+  # Source: the commit the release tag points to (not main HEAD).
+  # CI is not re-run here — branch protection on develop enforces
+  # that every commit eligible for release already passed CI.
+  # ============================================================
+  build-images:
+    name: Build & Push Production Images
+    runs-on: ubuntu-24.04
+    # Skip pre-releases (alphas, betas, RCs) — only full releases deploy to production.
+    if: "!github.event.release.prerelease"
+    concurrency:
+      group: cd-production-build
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      php_tag: ${{ steps.image-tags.outputs.php_tag }}
+      caddy_tag: ${{ steps.image-tags.outputs.caddy_tag }}
+      version: ${{ steps.image-tags.outputs.version }}
+
+    steps:
+      # On a release event, github.sha is the commit the tag points to.
+      # actions/checkout resolves this automatically — no ref: override needed.
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+
+      # Lightweight gate: confirms the tag commit has a passing CI check suite.
+      # This replaces re-running lint/test/build-assets (which already ran on develop).
+      # Hard blocks on failure — do not remove exit 1.
+      - name: Verify tag commit passed CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          echo "Checking CI status for commit $COMMIT_SHA"
+          for i in 1 2 3; do
+            CONCLUSION=$(gh api \
+              repos/${{ github.repository }}/commits/${COMMIT_SHA}/check-suites \
+              --jq '[.check_suites[] | select(.app.slug == "github-actions")] | map(.conclusion) | unique | join(",")' \
+              2>/dev/null || echo "unknown")
+            echo "Check suite conclusions: $CONCLUSION"
+            if echo "$CONCLUSION" | grep -qE "^success$"; then
+              echo "CI passed. Proceeding with production build."
+              break
+            fi
+            if [ "$i" -eq 3 ]; then
+              echo "ERROR: Tag commit $COMMIT_SHA did not pass CI (conclusions: $CONCLUSION)."
+              echo "Ensure branch protection on develop requires lint, test, and build-assets."
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # metadata-action strips the leading 'v' from semver tags by default:
+      # tag v1.2.3 → image tags 1.2.3 and 1.2
+      - name: Extract PHP image metadata
+        id: php-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.PHP_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      - name: Extract Caddy image metadata
+        id: caddy-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.CADDY_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      # Warms from the staging image — same Dockerfile, very high layer hit rate.
+      - name: Build and push PHP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          target: runtime
+          push: true
+          tags: ${{ steps.php-meta.outputs.tags }}
+          labels: ${{ steps.php-meta.outputs.labels }}
+          build-args: |
+            ACTIVE_THEME=default
+          cache-from: type=registry,ref=${{ env.PHP_IMAGE_NAME }}:staging
+          cache-to: type=inline
+
+      # BuildKit reuses cached layers from the step above.
+      - name: Build and push Caddy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          target: caddy-stage
+          push: true
+          tags: ${{ steps.caddy-meta.outputs.tags }}
+          labels: ${{ steps.caddy-meta.outputs.labels }}
+          build-args: |
+            ACTIVE_THEME=default
+          cache-from: type=registry,ref=${{ env.CADDY_IMAGE_NAME }}:staging
+          cache-to: type=inline
+
+      - name: Capture SHA image tags for deploy job
+        id: image-tags
+        run: |
+          PHP_SHA=$(echo "${{ steps.php-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
+          CADDY_SHA=$(echo "${{ steps.caddy-meta.outputs.tags }}" | tr ',' '\n' | grep "sha-" | head -1)
+          echo "php_tag=$PHP_SHA"     >> $GITHUB_OUTPUT
+          echo "caddy_tag=$CADDY_SHA" >> $GITHUB_OUTPUT
+          echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+
+  # ============================================================
+  # Job 2: Deploy to Production Swarm
+  # Uses immutable SHA tags for the stack deploy (mutable tags like
+  # 'latest' are not safe in Swarm — nodes may not re-pull them).
+  # Queued, never cancelled — a deploy killed mid-rollout leaves
+  # the Swarm stack in an indeterminate state.
+  # ============================================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-24.04
+    needs: [build-images]
+    environment:
+      name: production
+    concurrency:
+      group: cd-production-deploy
+      cancel-in-progress: false
+
+    steps:
+      # Checkout needed to access infra/docker-stack.yml and the production override.
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+
+      - name: Configure SSH for Docker context
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_VPS_SSH_KEY }}" > ~/.ssh/vps_deploy_key
+          chmod 600 ~/.ssh/vps_deploy_key
+          ssh-keyscan -H "${{ secrets.PROD_VPS_HOST }}" >> ~/.ssh/known_hosts
+          eval $(ssh-agent -s)
+          ssh-add ~/.ssh/vps_deploy_key
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+
+      - name: Create Docker context
+        run: |
+          docker context create vps \
+            --docker "host=ssh://deploy@${{ secrets.PROD_VPS_HOST }}"
+
+      # The production override file sets APP_ENV=production and the real APP_URL.
+      # Docker Swarm merges compose files in order — later files override earlier ones.
+      - name: Deploy stack to Production Swarm
+        env:
+          PHP_IMAGE: ${{ needs.build-images.outputs.php_tag }}
+          CADDY_IMAGE: ${{ needs.build-images.outputs.caddy_tag }}
+        run: |
+          echo "Deploying ${{ needs.build-images.outputs.version }}"
+          echo "  PHP:   $PHP_IMAGE"
+          echo "  Caddy: $CADDY_IMAGE"
+          docker --context vps stack deploy \
+            --compose-file infra/docker-stack.yml \
+            --compose-file infra/docker-stack.production.yml \
+            --with-registry-auth \
+            --prune \
+            nikeflow
+
+      - name: Wait for rollout
+        run: |
+          echo "=== Waiting for nikeflow_php rollout ==="
+          for i in $(seq 1 40); do
+            REPLICAS=$(docker --context vps service ls \
+              --filter name=nikeflow_php \
+              --format "{{.Replicas}}" 2>/dev/null || echo "0/0")
+            RUNNING=$(echo "$REPLICAS" | cut -d'/' -f1)
+            DESIRED=$(echo "$REPLICAS" | cut -d'/' -f2)
+            echo "  Replicas: $REPLICAS ($i/40)"
+            if [ "$RUNNING" = "$DESIRED" ] && [ "$DESIRED" != "0" ]; then
+              echo "Rollout complete after $((i * 5))s."
+              exit 0
+            fi
+            if [ "$i" -eq 40 ]; then
+              echo "ERROR: Rollout did not complete in 200s."
+              docker --context vps service ps nikeflow_php --no-trunc
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Prune dangling images on production VPS
+        run: docker --context vps image prune -f
