@@ -41,7 +41,15 @@ services:
       - caddy_config:/config # Caddy internal config state
     deploy:
       update_config:
-        order: start-first
+        order: stop-first
+        failure_action: rollback
+        delay: 5s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ── php: Laravel application (PHP-FPM) ──────────────────────────────────────
   php:
@@ -72,7 +80,9 @@ services:
       TRUSTED_PROXIES: "*"
     deploy:
       update_config:
-        order: start-first
+        order: stop-first
+        failure_action: rollback
+        delay: 5s
     healthcheck:
       test: ["CMD", "php-fpm", "-t"]
       interval: 15s

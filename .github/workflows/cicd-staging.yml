@@ -278,28 +278,37 @@ jobs:
             --prune \
             nikeflow
 
-      # Polls until all php replicas are running or times out after 200s.
+      # Polls until all replicas are running for BOTH php and caddy, or times out.
+      # Both must be healthy before the deploy is considered complete — checking
+      # only php (old behaviour) declared success while caddy was still transitioning,
+      # causing a manifest/asset mismatch window that produced 404s.
       - name: Wait for rollout
         run: |
-          echo "=== Waiting for nikeflow_php rollout ==="
-          for i in $(seq 1 40); do
-            REPLICAS=$(docker --context vps service ls \
-              --filter name=nikeflow_php \
-              --format "{{.Replicas}}" 2>/dev/null || echo "0/0")
-            RUNNING=$(echo "$REPLICAS" | cut -d'/' -f1)
-            DESIRED=$(echo "$REPLICAS" | cut -d'/' -f2)
-            echo "  Replicas: $REPLICAS ($i/40)"
-            if [ "$RUNNING" = "$DESIRED" ] && [ "$DESIRED" != "0" ]; then
-              echo "Rollout complete after $((i * 5))s."
-              exit 0
-            fi
-            if [ "$i" -eq 40 ]; then
-              echo "ERROR: Rollout did not complete in 200s."
-              docker --context vps service ps nikeflow_php --no-trunc
-              exit 1
-            fi
-            sleep 5
-          done
+          wait_for_service() {
+            local svc="$1" label="$2"
+            echo "=== Waiting for ${label} rollout ==="
+            for i in $(seq 1 40); do
+              REPLICAS=$(docker --context vps service ls \
+                --filter name="${svc}" \
+                --format "{{.Replicas}}" 2>/dev/null || echo "0/0")
+              RUNNING=$(echo "$REPLICAS" | cut -d'/' -f1)
+              DESIRED=$(echo "$REPLICAS" | cut -d'/' -f2)
+              echo "  ${label} replicas: $REPLICAS ($i/40)"
+              if [ "$RUNNING" = "$DESIRED" ] && [ "$DESIRED" != "0" ]; then
+                echo "${label} rollout complete after $((i * 5))s."
+                return 0
+              fi
+              if [ "$i" -eq 40 ]; then
+                echo "ERROR: ${label} rollout did not complete in 200s."
+                docker --context vps service ps "${svc}" --no-trunc
+                return 1
+              fi
+              sleep 5
+            done
+          }
+
+          wait_for_service "nikeflow_php"   "PHP"   || exit 1
+          wait_for_service "nikeflow_caddy" "Caddy" || exit 1
 
       - name: Prune dangling images on VPS
         run: docker --context vps image prune -f
