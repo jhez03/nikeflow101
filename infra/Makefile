@@ -36,10 +36,10 @@ artisan-%:
 
 # ── Docker Swarm stack operations ─────────────────────────────────────────────
 # Prerequisites before first deploy:
-#   1. Create context:         make stack-context-create VPS_HOST=<ip>
-#   2. Init Swarm on VPS:      docker --context vps swarm init
-#   3. Create external volume: docker --context vps volume create nikeflow_db_data
-#   4. Create secrets:         make stack-secrets-init
+#   1. Create context:          make stack-context-create VPS_HOST=<ip>
+#   2. Init Swarm on VPS:       docker --context vps swarm init
+#   3. Create external volumes: make stack-volumes-init
+#   4. Create secrets:          make stack-secrets-init
 # Then deploy: make stack-deploy PHP_IMAGE=ghcr.io/.../php:sha-xxx CADDY_IMAGE=ghcr.io/.../caddy:sha-xxx
 
 STACK_NAME = nikeflow
@@ -76,12 +76,18 @@ stack-context-create: ## Create Docker context pointing to VPS. Usage: make stac
 	docker context create vps --docker "host=ssh://deploy@$(VPS_HOST)"
 	@echo "Context created. Test with: docker --context vps info"
 
+stack-volumes-init: ## Pre-create all external volumes on the remote Swarm (run once before first deploy)
+	$(DOCKER_CTX) volume create nikeflow_db_data
+	$(DOCKER_CTX) volume create nikeflow_caddy_data
+	$(DOCKER_CTX) volume create nikeflow_caddy_config
+	@echo "Volumes created. Verify with: docker --context vps volume ls"
+
 stack-secrets-init: ## Interactively create all required Swarm secrets on the remote VPS
 	@printf "app_key value (paste base64:... APP_KEY): "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create app_key -
 	@printf "db_password value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create db_password -
 	@printf "db_username value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create db_username -
 	@printf "mysql_root_password value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create mysql_root_password -
-	@printf "redis_password value: "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create redis_password -
+	@printf "caddy_basic_auth_hash (bcrypt hash — generate with: docker run --rm caddy caddy hash-password --plaintext <pass>): "; read -rs v; echo; printf "%s" "$$v" | $(DOCKER_CTX) secret create caddy_basic_auth_hash -
 	@echo "All secrets created. Verify with: make stack-secrets-list"
 
 stack-secrets-list: ## List secret names on the remote Swarm (values are never shown)
