@@ -21,6 +21,10 @@
 }
 
 staging.thelaravelers.com {
+
+    basic_auth {
+        admin $2a$14$ZdpXPc/5QgjIN0HNkaC57e.PufYTKqi0LCGqEdVAqgrHjHP7ypzXW
+    }
     # Security headers
     header X-Frame-Options "SAMEORIGIN"
     header X-Content-Type-Options "nosniff"
