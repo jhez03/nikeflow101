@@ -15,6 +15,8 @@
 #   printf 'laravel'    | docker --context vps secret create db_username -
 #   printf 'rootpass'   | docker --context vps secret create mysql_root_password -
 #   printf 'password'   | docker --context vps secret create redis_password -
+#   printf '<bcrypt>'   | docker --context vps secret create caddy_basic_auth_hash -
+#   (generate hash with: docker run --rm caddy caddy hash-password --plaintext <pass>)
 #
 # External volumes must also be pre-created (run once, or use: make stack-volumes-init):
 #   docker --context vps volume create nikeflow_db_data
@@ -41,6 +43,8 @@ services:
     volumes:
       - caddy_data:/data # Let's Encrypt certificates — must survive redeploys
       - caddy_config:/config # Caddy internal config state
+    secrets:
+      - caddy_basic_auth_hash
     deploy:
       update_config:
         order: stop-first
@@ -131,6 +135,8 @@ secrets:
   db_username:
     external: true
   mysql_root_password:
+    external: true
+  caddy_basic_auth_hash:
     external: true
 
 volumes:

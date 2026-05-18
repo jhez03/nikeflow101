@@ -21,6 +21,13 @@
 }
 
 staging.thelaravelers.com {
+    # HTTP Basic Auth — password hash injected at runtime from Docker secret
+    # via CADDY_BASIC_AUTH_HASH env var set by caddy-entrypoint.sh.
+    # Generate hash with: docker run --rm caddy caddy hash-password --plaintext <pass>
+    basicauth * {
+        staging {env.CADDY_BASIC_AUTH_HASH}
+    }
+
     #adding comment in caddyfile
     # Security headers
     header X-Frame-Options "SAMEORIGIN"

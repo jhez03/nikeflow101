@@ -109,4 +109,13 @@ FROM caddy:2-alpine AS caddy-stage
 COPY --from=node-builder /app/public /var/www/public
 COPY infra/Caddyfile /etc/caddy/Caddyfile
 
+# Entrypoint reads the caddy_basic_auth_hash Docker secret and exports it as
+# CADDY_BASIC_AUTH_HASH before exec-ing Caddy, so the Caddyfile can reference
+# {env.CADDY_BASIC_AUTH_HASH} without the hash ever being baked into the image.
+COPY infra/docker/caddy-entrypoint.sh /usr/local/bin/caddy-entrypoint.sh
+RUN chmod +x /usr/local/bin/caddy-entrypoint.sh
+
 EXPOSE 80 443
+
+ENTRYPOINT ["/usr/local/bin/caddy-entrypoint.sh"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
