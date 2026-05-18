@@ -21,6 +21,9 @@
 }
 
 staging.thelaravelers.com {
+    basicauth * {
+        admin surigaolaravelers03#
+    }
     # Security headers
     header X-Frame-Options "SAMEORIGIN"
     header X-Content-Type-Options "nosniff"
