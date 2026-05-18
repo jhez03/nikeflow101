@@ -32,6 +32,9 @@ staging.thelaravelers.com {
         file_server
     }
 
+    basicauth {
+        admin surigaolaravelers03#
+    }
 
     # Health check endpoint — handled directly by Caddy, no FastCGI round-trip.
     # Used by the Docker Swarm health check (wget http://localhost/health).
