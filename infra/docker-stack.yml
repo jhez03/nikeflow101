@@ -16,8 +16,10 @@
 #   printf 'rootpass'   | docker --context vps secret create mysql_root_password -
 #   printf 'password'   | docker --context vps secret create redis_password -
 #
-# External volume must also be pre-created:
+# External volumes must also be pre-created (run once, or use: make stack-volumes-init):
 #   docker --context vps volume create nikeflow_db_data
+#   docker --context vps volume create nikeflow_caddy_data
+#   docker --context vps volume create nikeflow_caddy_config
 
 services:
   # ── Caddy: TLS termination + static assets + FastCGI proxy ─────────────────
@@ -49,7 +51,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 60s # allow time for TLS cert load/acquire before checks begin
 
   # ── php: Laravel application (PHP-FPM) ──────────────────────────────────────
   php:
@@ -133,8 +135,13 @@ secrets:
 
 volumes:
   db_data:
-    external:
-      true # pre-created: `docker volume create nikeflow_db_data`
-      # external: true prevents `stack rm` from deleting production data
-  caddy_data: # Let's Encrypt certificates
-  caddy_config: # Caddy internal config state
+    external: true # pre-created: `docker volume create nikeflow_db_data`
+    # external: true prevents `stack rm` from deleting production data
+  caddy_data:
+    external: true # pre-created: `docker volume create nikeflow_caddy_data`
+    # Persists Let's Encrypt certificates across deploys. Without this,
+    # stack deploy --prune recreates the volume, forcing Caddy to re-run
+    # ACME HTTP-01 on every deploy (10-60s extra startup, second race window).
+  caddy_config:
+    external: true # pre-created: `docker volume create nikeflow_caddy_config`
+    # Persists Caddy internal config state across deploys.

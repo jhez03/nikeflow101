@@ -8,6 +8,18 @@
     email jlibay1053538@gmail.com
 }
 
+# Health check endpoint for Docker Swarm.
+# wget inside the container sends Host: localhost, which does not match the
+# named site block below. This bare :80 block catches those requests so the
+# health check receives 200 instead of 404. It does NOT interfere with
+# ACME HTTP-01 — Caddy handles /.well-known/acme-challenge/ automatically
+# across all site blocks regardless of Host header.
+:80 {
+    handle /health {
+        respond "ok" 200
+    }
+}
+
 staging.thelaravelers.com {
     # Security headers
     header X-Frame-Options "SAMEORIGIN"
