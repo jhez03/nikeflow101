@@ -42,10 +42,9 @@ services:
       - caddy_data:/data # Let's Encrypt certificates — must survive redeploys
       - caddy_config:/config # Caddy internal config state
     deploy:
-      replicas: 2
+      replicas: 1
       update_config:
-        order: start-first
-        parallelism: 1
+        order: stop-first
         failure_action: rollback
         delay: 5s
     healthcheck:
