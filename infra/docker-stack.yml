@@ -42,9 +42,11 @@ services:
       - caddy_data:/data # Let's Encrypt certificates — must survive redeploys
       - caddy_config:/config # Caddy internal config state
     deploy:
+      replicas: 2
       update_config:
-        order: stop-first
-        failure_action: pause
+        order: start-first
+        parallelism: 1
+        failure_action: rollback
         delay: 5s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/health"]
@@ -81,9 +83,11 @@ services:
       FILESYSTEM_DISK: local
       TRUSTED_PROXIES: "*"
     deploy:
+      replicas: 2
       update_config:
-        order: stop-first
-        failure_action: pause
+        order: start-first
+        parallelism: 1
+        failure_action: rollback
         delay: 5s
     healthcheck:
       test: ["CMD", "php-fpm", "-t"]

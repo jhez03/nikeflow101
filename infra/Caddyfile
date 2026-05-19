@@ -50,13 +50,12 @@ staging.thelaravelers.com {
 
 
 
-    # Health check endpoint — handled directly by Caddy, no FastCGI round-trip.
     # Used by the Docker Swarm health check (wget http://localhost/health).
     handle /health {
         respond "ok" 200
     }
 
-    # Block dot-files (e.g. .env, .git) except ACME well-known challenge path
+    # Block dot-files (e.g. .env, .git)
     @hidden {
         path /.*
         not path /.well-known*
